@@ -471,6 +471,8 @@ const SND = (() => {
   const FX = {
     click(t){ tone(1050, t, .06, {type:'square', vol:.07}); },
     next(t){ tone(700, t, .05, {vol:.12}); },
+    meow(t){ tone(620, t, .32, {type:'sine', vol:.16, slide:1.5}); tone(900, t + .16, .3, {type:'sine', vol:.12, slide:.6}); },
+    bark(t){ noise(t, .1, {vol:.22, freq:850, q:2}); tone(320, t, .12, {type:'square', vol:.08, slide:.6}); noise(t + .18, .09, {vol:.18, freq:950, q:2}); },
     blip(t, p = 1){ tone(N(72 + Math.floor(Math.random()*5)) * p, t, .045, {type:'square', vol:.045}); },
     step(t){ noise(t, .08, {vol:.16, freq:260 + Math.random()*140, type:'lowpass', q:1}); },
     quest(t){ [72, 76, 79, 84].forEach((m, i) => tone(N(m), t + i*.08, .35, {vol:.2})); },
@@ -519,32 +521,78 @@ const SND = (() => {
     if (ctx){ if (k === 'bgm') bgmBus.gain.setTargetAtTime(v ? .2 : 0, ctx.currentTime, .05); if (k === 'sfx') sfxBus.gain.setTargetAtTime(v ? .6 : 0, ctx.currentTime, .05); }
     if (k === 'voice' && !v) stopVoice();
   }
-  /* 음성: 기기의 한국어 음성으로 대사 읽기, 없으면 말소리(삐리리) */
-  let koVoice = null;
+  /* 음성: 기기의 한국어 음성으로 대사 읽기, 없으면 말소리(삐리리)
+     어색함 줄이기: 높낮이 폭은 0.9~1.15로 좁게, 인물 차이는 빠르기와 남녀 목소리로 · 문장 단위로 끊어 읽기 · 지문과 의성어는 읽지 않음 */
+  let koVoice = null, maleVoice = null, voiceList = [];
   const hasTTS = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
-  function pickVoice(){ if (!hasTTS) return; try { const vs = speechSynthesis.getVoices();
-    koVoice = vs.find(v => /^ko/i.test(v.lang) && /Heami|SunHi|Google|Yuna/i.test(v.name)) || vs.find(v => /^ko/i.test(v.lang)) || null; } catch(e) {} }
+  const MALE_NAME = /InJoon|Hyunsu|Bong|GookMin|koc|kod|male|남성/i, FEMALE_NAME = /SunHi|Heami|Yuna|Sora|JiMin|SeoHyeon|ism|kob|female|여성/i;
+  function voiceScore(v){
+    if (!/^ko/i.test(v.lang)) return -1;
+    let s = 1; const n = v.name || '';
+    if (/Natural|Neural/i.test(n)) s += 6;          // 엣지 · 윈도우 신경망 음성
+    if (/Google/i.test(n)) s += 5;                  // 크롬 · 안드로이드 구글 음성
+    if (/Samsung/i.test(n)) s += 4;
+    if (/Online/i.test(n)) s += 2;
+    if (/ko-KR/i.test(v.lang)) s += .5;
+    return s;
+  }
+  function pickVoice(){ if (!hasTTS) return; try {
+    voiceList = speechSynthesis.getVoices().filter(v => voiceScore(v) > 0).sort((a, b) => voiceScore(b) - voiceScore(a));
+    koVoice = voiceList.find(v => !MALE_NAME.test(v.name)) || voiceList[0] || null;
+    maleVoice = voiceList.find(v => MALE_NAME.test(v.name) && !FEMALE_NAME.test(v.name)) || null;
+  } catch(e) {} }
   if (hasTTS){ pickVoice(); try { speechSynthesis.addEventListener('voiceschanged', pickVoice); } catch(e) {} }
   const SAY = [[/PSVR2/g,'피에스 브이알 투'],[/갤럭시XR/g,'갤럭시 엑스알'],[/XR/g,'엑스알'],[/VR/g,'브이알'],[/MR/g,'엠알'],[/IPD/g,'아이피디'],[/OTT/g,'오티티'],[/HEEK/g,'히크'],
-    [/퀘스트3S/g,'퀘스트 쓰리 에스'],[/3S/g,'쓰리 에스'],[/퀘스트3/g,'퀘스트 쓰리'],[/퀘스트2/g,'퀘스트 투'],[/피코4/g,'피코 포'],[/-10D/g,'마이너스 십 디옵터'],[/Wander/g,'원더'],[/\.\.\./g,', ']];
-  const VO = {buddy:[1.55, 1.1], me:[1.1, 1.08], '하늘':[1.35, 1.08], '지우':[1.5, 1.12], '안경사':[0.9, 1.0], '벤치 할아버지':[0.6, .9], '할머니':[1.0, .88],
-    '강아지 산책하는 아이':[1.7, 1.12], '쌍둥이 언니':[1.55, 1.12], '멍멍이':[1.9, 1.2], '고양이':[1.9, 1.1], '놀이터 사장님':[0.85, 1.05], '붕어빵 아저씨':[0.75, 1.0], '낚시꾼 아저씨':[0.7, .95]};
-  const voicePitch = who => VO[who] || [1.0, 1.05];
-  let spoken = 0;
-  function sayText(text){ let s = text; SAY.forEach(([a, b]) => s = s.replace(a, b)); return s; }
+    [/퀘스트3S/g,'퀘스트 쓰리 에스'],[/3S/g,'쓰리 에스'],[/퀘스트3/g,'퀘스트 쓰리'],[/퀘스트2/g,'퀘스트 투'],[/피코4/g,'피코 포'],[/-10D/g,'마이너스 십 디옵터'],[/Wander/g,'원더']];
+  // [높이, 빠르기, 남성 여부]
+  const VO = {buddy:[1.12, 1.05], me:[1.0, 1.03], '하늘':[1.08, 1.03], '지우':[1.12, 1.05], '서진':[1.08, 1.04], '쌍둥이 언니':[1.12, 1.05], '강아지 산책하는 아이':[1.15, 1.07],
+    '할머니':[1.0, .9], '꽃집 사장님':[1.02, 1.0], '요가 선생님':[1.0, .95], '개발자 언니':[1.0, 1.04], '러너':[1.05, 1.07],
+    '안경사':[.98, .98, 1], '벤치 할아버지':[.9, .9, 1], '놀이터 사장님':[.95, 1.02, 1], '영화광 아저씨':[.94, 1.0, 1], '붕어빵 아저씨':[.92, .98, 1], '낚시꾼 아저씨':[.9, .94, 1],
+    '기기 박사':[.95, 1.02, 1], '우체부':[.97, 1.0, 1], '도윤':[1.02, 1.05, 1], '민수':[1.0, 1.04, 1], '트레이너':[.96, 1.06, 1]};
+  const SOUND_SPEAKER = {'고양이':'meow', '멍멍이':'bark'};
+  const voiceOf = who => VO[who] || [1.0, 1.0];
+  const voicePitch = who => voiceOf(who);
+  const babblePitch = who => 1 + (voiceOf(who)[0] - 1) * 3;
+  let spoken = 0, lastPlan = null;
+  function sayText(text){
+    let s = String(text).trim();
+    if (/^\(.*\)$/.test(s)) return '';                       // 괄호 지문은 읽지 않음
+    s = s.replace(/\s*\([A-Za-z0-9 .,+-]+\)/g, '');           // 영문 괄호 보충(예: (IPD)) 생략
+    s = s.replace(/[()]/g, ', ').replace(/["“”'‘’]/g, '');
+    SAY.forEach(([a, b]) => s = s.replace(a, b));
+    s = s.replace(/\.\.\.|…/g, ', ').replace(/\s*,\s*(,\s*)+/g, ', ').replace(/\s+/g, ' ').trim();
+    return s;
+  }
+  function chunks(s){ return (s.match(/[^.!?]+[.!?]*/g) || []).map(x => x.trim()).filter(x => x.replace(/[.!?,\s]/g, '')); }
+  function plan(who, text){
+    if (SOUND_SPEAKER[who]) return {sound:SOUND_SPEAKER[who]};
+    const s = sayText(text); if (!s) return {silent:true};
+    const [p, r, male] = voiceOf(who), v = (male && maleVoice) ? maleVoice : koVoice;
+    // 남성 목소리가 없는 기기에서는 남성 인물만 살짝 낮게
+    const pitch = Math.min(1.15, Math.max(.9, (male && !maleVoice) ? Math.min(p, .92) : p)), rate = Math.min(1.1, Math.max(.88, r));
+    return {parts:chunks(s), pitch, rate, voice:v};
+  }
   function speak(who, text){
+    const pl = plan(who, text); lastPlan = pl;
+    if (pl.sound){ sfx(pl.sound); return true; }
     if (!on.voice || !hasTTS || !koVoice) return false;
+    if (pl.silent){ stopVoice(); return true; }
     try {
       speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(sayText(text)), [p, r] = voicePitch(who);
-      u.voice = koVoice; u.lang = koVoice.lang; u.pitch = p; u.rate = r; u.volume = 1;
-      u.onstart = () => duck(true); u.onend = u.onerror = () => duck(false);
-      speechSynthesis.speak(u); spoken++; return true;
+      pl.parts.forEach((part, i) => {
+        const u = new SpeechSynthesisUtterance(part);
+        u.voice = pl.voice; u.lang = pl.voice.lang; u.pitch = pl.pitch; u.rate = pl.rate; u.volume = 1;
+        if (i === 0) u.onstart = () => duck(true);
+        if (i === pl.parts.length - 1) u.onend = u.onerror = () => duck(false);
+        speechSynthesis.speak(u);
+      });
+      spoken++; return true;
     } catch(e) { return false; }
   }
   function stopVoice(){ if (hasTTS) try { speechSynthesis.cancel(); } catch(e) {} duck(false); }
-  return {init, sfx, set, on, speak, stopVoice, voicePitch, sayText,
-    get ready(){ return !!ctx; }, get tts(){ return !!koVoice; }, get state(){ return ctx ? ctx.state : 'none'; }, get bgmSteps(){ return bgmSteps; }, get spoken(){ return spoken; }};
+  return {init, sfx, set, on, speak, stopVoice, voicePitch, babblePitch, sayText, plan,
+    get ready(){ return !!ctx; }, get tts(){ return !!koVoice; }, get state(){ return ctx ? ctx.state : 'none'; }, get bgmSteps(){ return bgmSteps; }, get spoken(){ return spoken; },
+    get voices(){ return {main: koVoice && koVoice.name, male: maleVoice && maleVoice.name, all: voiceList.map(v => v.name)}; }};
 })();
 
 /* ================= 동네 사람들이 들려주는 정보 (HEEK 콘텐츠 캠페인 근거) ================= */
@@ -1276,11 +1324,11 @@ function nextLine(){
   $('dialog').classList.toggle('has-face', showFace);
   $('face').hidden = !showFace; if (showFace) $('face').src = FACES[face || 'basic'];
   full = l[1]; $('next').classList.remove('wait');
-  const voiced = SND.speak(who, full), bp = SND.voicePitch(who)[0];
+  const voiced = SND.speak(who, full), bp = SND.babblePitch(who);
   if (reduce){ $('dtext').textContent = full; $('next').classList.add('wait'); return; }
   let i = 0; $('dtext').textContent = '';
   typing = setInterval(() => { i++; $('dtext').textContent = full.slice(0, i);
-    if (!voiced && i % 2 === 0 && full[i-1] !== ' ') SND.sfx('blip', .75 + bp*.35);
+    if (!voiced && i % 2 === 0 && full[i-1] !== ' ') SND.sfx('blip', bp);
     if (i >= full.length){ clearInterval(typing); typing = null; $('next').classList.add('wait'); } }, 24);
 }
 $('dialog').addEventListener('click', e => { e.stopPropagation(); nextLine(); });
