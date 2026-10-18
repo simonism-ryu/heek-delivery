@@ -1532,14 +1532,14 @@ function yawTo(baseQ, objLocalPos){
   return Math.atan2(v.x, v.z);
 }
 function frame(now){
-  const dt = Math.min((now - last)/1000, .05); last = now; tAll += dt;
+  const raw = Math.min((now - last)/1000, .5), dt = Math.min(raw, .05); last = now; tAll += dt;  // 카메라 전환은 실제 경과 시간(raw) 기준
 
   if (mode === 'title'){
     planet.rotateOnWorldAxis(UP, dt*.12);
     planet.rotateOnWorldAxis(new THREE.Vector3(1,0,0), dt*.03);
   }
   if (camT < 1){
-    camT = Math.min(1, camT + dt/camDur);
+    camT = Math.min(1, camT + raw/camDur);
     const e = camT < .5 ? 2*camT*camT : 1 - Math.pow(-2*camT + 2, 2)/2;
     camera.position.lerpVectors(camFrom.pos, camTo.pos, e);
     curLook.lerpVectors(camFrom.look, camTo.look, e); camera.lookAt(curLook);
